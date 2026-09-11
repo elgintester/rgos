@@ -1,0 +1,44 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# NOTE: the vendor namespace `ruijie` is deliberately NOT used - it is
+# reserved for the vendor and cannot be claimed by a community author.
+# `elgintester` is a personal/test namespace instead. Galaxy accepts
+# lowercase Python identifiers only ([a-z][a-z0-9_]*), so a human-friendly
+# name such as "Elgin-RGOS-Test" must be normalized before use (see
+# PUBLISHING.md). Published collection names cannot be renamed later, so if a
+# permanent namespace is wanted, request one via
+# https://github.com/ansible/galaxy/issues and publish under it separately.
+namespace: elgintester
+name: rgos
+version: 0.5.1
+readme: README.md
+authors:
+  - Ruijie RGOS collection contributors
+description: >-
+  Community collection for managing Ruijie Networks devices running RGOS
+  (e.g. RG-S6150 switches) over SSH via ansible.netcommon network_cli.
+  Provides cliconf and terminal plugins; no vendor SDK or device agent
+  required.
+license:
+  - GPL-3.0-or-later
+tags:
+  - ruijie
+  - rgos
+  - network
+  - networking
+  - switch
+repository: https://github.com/elgintester/rgos
+documentation: https://github.com/elgintester/rgos/blob/main/README.md
+homepage: https://github.com/elgintester/rgos
+issues: https://github.com/elgintester/rgos/issues
+dependencies:
+  # The cliconf/terminal plugins build on netcommon's plugin_utils base
+  # classes and the network_cli connection plugin.
+  ansible.netcommon: ">=5.2.0"
+build_ignore:
+  - PUBLISHING.md
+  - tests/
+  - .git
+  - .gitignore

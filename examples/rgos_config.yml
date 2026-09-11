@@ -1,0 +1,97 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# rgos_config - RGOS 原生配置模块。
+#
+# 为什么存在：它内部把 warnings 保持为列表（所以你永远不会看到
+# netcommon 8.6.2 的 cli_config 产生的逐字符 [WARNING] 刷屏），
+# 理解 parents/lines 所以缩进是推导出来的而不是手数空格，
+# 并且可以通过 save_when 自己持久化变更。
+- name: rgos_config usage patterns
+  hosts: ruijie
+  gather_facts: false
+
+  tasks:
+    # --- parents/lines：缩进由 parents 数量推导 --------------------------
+    - name: Configure an access port without counting spaces
+      elgintester.rgos.rgos_config:
+        lines:
+          - switchport mode access
+          - switchport access vlan 100
+        parents: interface TFGigabitEthernet 0/15
+      register: port_result
+
+    - name: Show what was actually pushed
+      ansible.builtin.debug:
+        var: port_result.commands
+
+    # --- 原始行：自己控制缩进 ----------------------------------------------
+    - name: Create a VLAN with raw lines
+      elgintester.rgos.rgos_config:
+        lines:
+          - vlan 100
+          - " name ANSIBLE_TEST"
+
+    # --- 变更前自动备份 -----------------------------------------------------
+    - name: Change config and auto-backup
+      elgintester.rgos.rgos_config:
+        lines:
+          - " description managed-by-ansible"
+        parents: interface TFGigabitEthernet 0/15
+        backup: true
+        backup_options:
+          dir_path: "{{ playbook_dir }}/../backup"
+
+    # --- save_when：不需要单独的 'write' 任务 ------------------------------
+    # 四个值，和 cisco.ios ios_config 语义一致：
+    #   never    - 不持久化（默认；重启会回退变更）
+    #   always   - 每次运行都持久化
+    #   changed  - 仅当本任务推送了什么才持久化
+    #   modified - 当 running-config 和 startup-config 不同时持久化，
+    #              即使本任务什么都没推送（捕获带外编辑）
+    - name: Change and persist only when this task changed something
+      elgintester.rgos.rgos_config:
+        lines:
+          - vlan 101
+          - " name PERSISTED_BY_ANSIBLE"
+        save_when: changed
+      register: saved_result
+
+    - name: Confirm whether the device saved the change
+      ansible.builtin.debug:
+        var: saved_result.saved
+
+    - name: Ensure device is persisted regardless of what caused drift
+      # 作为 play 末尾的独立任务很有用：它不推送任何东西，
+      # 只在 running-config 和 startup-config 发生漂移时写入。
+      elgintester.rgos.rgos_config:
+        save_when: modified
+      register: drift_result
+
+    - name: Confirm whether drift was detected
+      ansible.builtin.debug:
+        var: drift_result.saved
+
+    # --- 干跑 ----------------------------------------------------------------
+    # 用 --check 运行整个 play，计算 diff 但不触碰设备：
+    #   ansible-playbook examples/rgos_config.yml --check --diff
+
+    # --- 清理 ----------------------------------------------------------------
+    # 上面的步骤写入了真实配置并持久化了一部分，所以清理必须移除所有东西
+    # 并再次保存——否则重启后 startup-config 仍会携带测试 VLAN 和 description。
+    - name: Remove the port description added earlier
+      elgintester.rgos.rgos_config:
+        lines:
+          - no description
+        parents: interface TFGigabitEthernet 0/15
+
+    - name: Remove everything this example created and persist cleanup
+      elgintester.rgos.rgos_config:
+        lines:
+          - no vlan 100
+          - no vlan 101
+        save_when: modified
+      # 注意：access 端口之前也被移到了 VLAN 100。删除 VLAN 会把端口
+      # 放回默认 VLAN 1；如果你的基线把它放在特定 VLAN，在这里用自己的
+      # lines/parents 任务恢复它。

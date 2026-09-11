@@ -1,0 +1,50 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# 示例 02：业务 VLAN + SVI/IP 地址（vlan + svi 模块）
+# ============================================================================
+# 场景：客户需要创建业务 VLAN，并为其配置三层接口（SVI）和 IP 地址。
+#       不需要端口绑定、AAA、dot1x。
+#
+# 开启的模块：vlan + svi
+# 必需参数：dev.svc_vlan, dev.svc_ip, dev.svc_mask
+# 可选参数：dev.svc_vlan_name, dev.svc_secondary_ip
+#
+# 安全特性：如果 SVI 已存在且带有不同的主 IP，playbook 会报错中止
+#           （RGOS 会静默替换主 IP，可能导致网络中断）。
+#
+# 运行：
+#   ansible-playbook examples/svc_vlan_02_vlan_svi.yml
+#
+# 回滚：把 svc_vlan_state 改为 rolledback，或运行示例 06。
+# ============================================================================
+- name: Deploy service VLAN with SVI and IP address
+  hosts: ruijie
+  gather_facts: false
+
+  vars:
+    # 开 vlan + svi，其余关闭
+    svc_features:
+      vlan: true
+      svi: true
+      port_binding: false
+      aaa: false
+      dot1x: false
+
+    svc_devices:
+      s6150-01:
+        svc_vlan: 100
+        svc_vlan_name: "OPS_SERVICE"     # 可选：VLAN 名称
+        svc_ip: 92.89.100.1               # SVI 主 IP
+        svc_mask: 255.255.255.0            # 掩码
+        # svc_secondary_ip: 92.89.100.2   # 可选：次 IP（取消注释即启用）
+      s6150-02:
+        svc_vlan: 101
+        svc_ip: 92.89.101.1
+        svc_mask: 255.255.255.0
+
+  roles:
+    - role: elgintester.rgos.svc_vlan
+      svc_vlan_state: deployed

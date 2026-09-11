@@ -1,0 +1,97 @@
+---
+# 公共前置检查：所有功能模块共享的初始化和安全检查。
+# 由 main.yml 在进入任何模块之前 include。
+#
+# 执行内容：
+#   1. 加载当前设备的参数（svc_devices[inventory_hostname]）
+#   2. 合并全局 feature 默认值与设备级覆盖
+#   3. 断言每台主机都有参数条目
+#   4. 断言每个已启用功能都有必需参数
+#   5. 抓取完整 running-config（供 aaa/dot1x 模块的状态检测使用）
+#   6. 确认每个目标端口存在
+#   7. 抓取每个目标端口的当前配置（供 port_binding/dot1x 模块的门控使用）
+#   8. 中止如果目标端口是 trunk（业务 VLAN 只在 access 端口上操作）
+
+- name: "Load this device's parameters"
+  ansible.builtin.set_fact:
+    dev: "{{ svc_devices[inventory_hostname] }}"
+
+- name: "Merge global feature defaults with per-device overrides"
+  ansible.builtin.set_fact:
+    features: >-
+      {{ svc_features | default({}) | combine(dev.features | default({})) }}
+
+- name: "Pre-flight - every host must have an entry in svc_devices"
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in svc_devices
+    fail_msg: >-
+      ABORTED: {{ inventory_hostname }} has no entry in svc_devices.
+      Add it to your svc_vars.yml before running this playbook.
+    success_msg: "Pre-flight OK: parameters found for {{ inventory_hostname }}"
+
+- name: "Pre-flight - validate required parameters for each enabled feature"
+  ansible.builtin.assert:
+    # 每个已启用功能都检查其必需参数；dot1x 额外要求 aaa 也启用
+    that:
+      - not features.vlan | default(true) or dev.svc_vlan is defined
+      - not features.svi | default(true) or (dev.svc_ip is defined and dev.svc_mask is defined)
+      - not features.port_binding | default(true) or (dev.svc_ports is defined and dev.svc_vlan is defined)
+      - not features.aaa | default(true) or (svc_aaa.radius_host is defined and svc_aaa.radius_key is defined and svc_aaa.auth_list is defined)
+      - not features.dot1x | default(true) or (features.aaa | default(true) and svc_aaa.dot1x_cmd is defined and svc_aaa.dot1x_auth_cmd is defined)
+    fail_msg: >-
+      ABORTED: one or more enabled features are missing required parameters
+      on {{ inventory_hostname }}. Check svc_devices and svc_aaa in svc_vars.yml.
+    success_msg: "Pre-flight OK: all enabled features have required parameters"
+
+- name: "Pre-flight - capture the running configuration"
+  ansible.netcommon.cli_command:
+    command: show running-config
+  register: rc_before
+  changed_when: false
+
+- name: "Pre-flight - confirm every target port exists"
+  ansible.netcommon.cli_command:
+    command: "show interface {{ item.name }} status"
+  register: port_exists
+  changed_when: false
+  ignore_errors: true   # 端口不存在时 cli_command 会 failed；用 ignore_errors 捕获，
+                        # 由下一个 assert 任务统一检查并给出清晰的错误信息
+  loop: "{{ dev.svc_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: features.port_binding | default(true) or features.dot1x | default(true)
+
+- name: "Pre-flight - abort if a target port is absent"
+  ansible.builtin.assert:
+    # cli_command 不返回 rc 字段（它不是 command/shell）；
+    # 用 failed 判断命令是否执行成功（端口不存在时 RGOS 会报错）
+    that:
+      - not item.failed
+    fail_msg: "ABORTED: port {{ item.item.name }} does not exist on {{ inventory_hostname }}"
+    success_msg: "Pre-flight OK: port {{ item.item.name }} exists"
+  loop: "{{ port_exists.results }}"
+  when: features.port_binding | default(true) or features.dot1x | default(true)
+
+- name: "Pre-flight - inspect each target port's configuration"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface {{ item.name }}"
+  register: port_rc
+  changed_when: false
+  loop: "{{ dev.svc_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: features.port_binding | default(true) or features.dot1x | default(true)
+
+- name: "Pre-flight - abort if a target port is a trunk"
+  ansible.builtin.assert:
+    # trunk 端口可能承载其他 VLAN 的流量，在它上面改 access VLAN 会破坏现有网络
+    that:
+      - >-
+        not (item.stdout | default('') | regex_search('(?m)^\\s*switchport mode trunk\\s*$'))
+    fail_msg: >-
+      ABORTED: {{ item.item.name }} on {{ inventory_hostname }} is a trunk
+      port. This playbook only operates on access ports.
+    success_msg: "Pre-flight OK: {{ item.item.name }} is not a trunk"
+  loop: "{{ port_rc.results }}"
+  when: features.port_binding | default(true) or features.dot1x | default(true)

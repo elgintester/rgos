@@ -1,0 +1,4 @@
+---
+# Tested with ansible-core 2.16.3 (Ubuntu 24.04 apt package) and
+# ansible.netcommon 8.6.2. netcommon 8.x itself requires ansible-core >= 2.16.
+requires_ansible: ">=2.16.0"

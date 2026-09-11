@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# 重载锐捷设备，带交互式确认处理。
+#
+# RGOS 在重启前会问 "Reload system?(Y/N)"；prompt/answer 参数自动处理确认。
+# 设备重启的瞬间 SSH 会话会被断开，所以 reload 任务本身通常以连接错误结束——
+# 这是预期的。之后通过 show version 验证重启（uptime 应该是分钟级，不是天级）。
+- name: Reload a Ruijie device
+  hosts: ruijie
+  gather_facts: false
+  tasks:
+    - name: Ask the operator to confirm
+      ansible.builtin.pause:
+        prompt: >-
+          About to reload {{ inventory_hostname }}.
+          Make sure config is saved. Press Enter to continue, Ctrl+C to abort.
+
+    - name: Issue reload and answer the confirmation prompt
+      ansible.netcommon.cli_command:
+        command: reload
+        prompt: "Reload system"
+        answer: "y"
+      ignore_errors: true
+
+    - name: Explain how to verify
+      ansible.builtin.debug:
+        msg: >-
+          Reload issued. The connection error above is expected (the device
+          drops the connection immediately). Verify the reboot with
+          'show version' - uptime should reflect a fresh boot.

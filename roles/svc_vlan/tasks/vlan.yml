@@ -1,0 +1,68 @@
+﻿---
+# 功能模块：vlan
+# 部署时创建业务 VLAN，回滚时删除业务 VLAN。
+#
+# RGOS 把 VLAN 存储为合并行 'vlan range 1,100,111-112,...'，
+# 所以候选配置 'vlan 100' 永远无法和存储形式做文本 diff。
+# 权威的存在性检查是完整 'show vlan' 表的行匹配——
+# 同时用于门控判断和变更后的断言验证。
+
+- name: "[vlan] Probe the service VLAN in the VLAN table"
+  ansible.netcommon.cli_command:
+    command: "show vlan"
+  register: vlan_probe
+  changed_when: false
+
+- name: "[vlan] Work out whether the VLAN exists"
+  ansible.builtin.set_fact:
+    vlan_exists: "{{ vlan_probe.stdout is search('(?m)^\\s*%s\\s+' | format(dev.svc_vlan)) }}"
+
+# --- 部署 ----------------------------------------------------------------
+
+- name: "[vlan][deploy] Ensure the service VLAN exists"
+  elgintester.rgos.rgos_config:
+    lines: >-
+      {{ ['vlan ' ~ dev.svc_vlan]
+         + ([' name ' ~ dev.svc_vlan_name | default('')]
+            if dev.svc_vlan_name | default('') | length else []) }}
+  when: svc_vlan_state | default('deployed') == 'deployed' and not vlan_exists
+  register: vlan_push
+
+- name: "[vlan][deploy] Verify - the service VLAN is in the VLAN table"
+  ansible.netcommon.cli_command:
+    command: "show vlan"
+  register: vlan_verify
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[vlan][deploy] Assert the service VLAN exists"
+  ansible.builtin.assert:
+    that:
+      - vlan_verify.stdout is search('(?m)^\\s*%s\\s+' | format(dev.svc_vlan))
+    fail_msg: "Deploy FAILED: VLAN {{ dev.svc_vlan }} does not exist on {{ inventory_hostname }}"
+    success_msg: "VLAN {{ dev.svc_vlan }} exists"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+# --- 回滚 ----------------------------------------------------------------
+
+- name: "[vlan][rollback] Delete the service VLAN"
+  elgintester.rgos.rgos_config:
+    lines:
+      - "no vlan {{ dev.svc_vlan }}"
+  when: svc_vlan_state | default('deployed') == 'rolledback' and vlan_exists
+  register: vlan_remove
+
+- name: "[vlan][rollback] Verify - the service VLAN is gone from the VLAN table"
+  ansible.netcommon.cli_command:
+    command: "show vlan"
+  register: vlan_gone
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'rolledback'
+
+- name: "[vlan][rollback] Assert the service VLAN was removed"
+  ansible.builtin.assert:
+    that:
+      - not (vlan_gone.stdout is search('(?m)^\\s*%s\\s+' | format(dev.svc_vlan)))
+    fail_msg: "Rollback FAILED: VLAN {{ dev.svc_vlan }} still appears in 'show vlan' on {{ inventory_hostname }}"
+    success_msg: "VLAN {{ dev.svc_vlan }} removed"
+  when: svc_vlan_state | default('deployed') == 'rolledback'

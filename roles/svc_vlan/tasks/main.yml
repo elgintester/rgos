@@ -1,0 +1,51 @@
+---
+# 模块化业务 VLAN 工作流的 role 入口。
+#
+# role 拆分为五个独立功能模块（vlan / svi / port_binding / aaa / dot1x）。
+# 每个模块由 'svc_features'（全局默认）中的功能开关控制，
+# 可通过 'dev.features' 按设备覆盖。关闭的模块完全跳过——
+# 不探测、不下发、不验证、不报错。
+#
+# 模块执行顺序取决于状态：
+#   deployed:    vlan -> svi -> port_binding -> aaa -> dot1x
+#   rolledback:  dot1x -> aaa -> port_binding -> svi -> vlan
+# （回滚必须逆序撤销；VLAN 在其 SVI 还存在时无法删除，等等。）
+#
+# 本 main.yml 是"完整工作流"入口：前置检查 -> 所有已启用模块 -> 持久化 -> 摘要。
+# 对于按模块展开的 playbook（例如作为示例的 ops03/ops04），
+# 调用 _preflight.yml，然后通过 tasks_from 调用每个模块，最后调用 _persist.yml。
+
+# ---------------------------------------------------------------------------
+# 1. 前置检查（加载参数、校验、抓取状态、检查端口）
+# ---------------------------------------------------------------------------
+
+- name: "Run common pre-flight checks"
+  ansible.builtin.include_tasks: _preflight.yml
+
+# ---------------------------------------------------------------------------
+# 2. 按状态相关顺序分发功能模块
+# ---------------------------------------------------------------------------
+
+- name: "Determine module execution order"
+  ansible.builtin.set_fact:
+    _module_order: >-
+      {{ ['vlan', 'svi', 'port_binding', 'aaa', 'dot1x']
+         if svc_vlan_state | default('deployed') == 'deployed'
+         else ['dot1x', 'aaa', 'port_binding', 'svi', 'vlan'] }}
+
+- name: "Dispatch feature modules"
+  ansible.builtin.include_tasks: "{{ item }}.yml"
+  loop: "{{ _module_order }}"
+  loop_control:
+    label: "{{ item }}"
+  when: features[item] | default(false)
+
+# ---------------------------------------------------------------------------
+# 3. 持久化 + 摘要（无论哪些模块启用，始终运行）
+# ---------------------------------------------------------------------------
+
+- name: "Persist changes to startup-config"
+  ansible.builtin.include_tasks: _persist.yml
+
+- name: "Final summary"
+  ansible.builtin.include_tasks: _summary.yml

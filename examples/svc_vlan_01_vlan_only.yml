@@ -1,0 +1,41 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# 示例 01：只配置业务 VLAN（vlan 模块）
+# ============================================================================
+# 场景：客户只需要创建一个业务 VLAN，不需要 SVI、端口绑定、AAA、dot1x。
+#
+# 开启的模块：vlan（其余 4 个关闭）
+# 必需参数：dev.svc_vlan
+#
+# 运行：
+#   ansible-playbook examples/svc_vlan_01_vlan_only.yml --check   # 预览
+#   ansible-playbook examples/svc_vlan_01_vlan_only.yml            # 执行
+#
+# 回滚：把 svc_vlan_state 改为 rolledback，或运行示例 06。
+# ============================================================================
+- name: Deploy only the service VLAN
+  hosts: ruijie
+  gather_facts: false
+
+  vars:
+    # 只开 vlan 模块，其余全部关闭
+    svc_features:
+      vlan: true
+      svi: false
+      port_binding: false
+      aaa: false
+      dot1x: false
+
+    # 每台设备只需指定 VLAN ID
+    svc_devices:
+      s6150-01:
+        svc_vlan: 100
+      s6150-02:
+        svc_vlan: 101
+
+  roles:
+    - role: elgintester.rgos.svc_vlan
+      svc_vlan_state: deployed   # deployed = 下发；rolledback = 回滚

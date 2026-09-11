@@ -1,0 +1,121 @@
+﻿---
+# 功能模块：aaa
+# 部署时配置 AAA 基础设施，回滚时移除 radius 和 dot1x 方法列表。
+#
+# 配置内容：
+#   aaa new-model
+#   radius-server host <ip> key <key>   （只写一次——RGOS 把 key 加密存储，
+#                                          明文永远无法和密文做 diff 相等）
+#   aaa authentication login default local   （保护管理登录）
+#   aaa authentication dot1x <list> group radius   （dot1x 方法列表）
+#
+# 全局 'dot1x authentication <list>' 应用命令和端口级 'dot1x port-control auto'
+# 在 dot1x 模块中，该模块依赖本模块（因为它引用本模块创建的方法列表）。
+#
+# 回滚怪癖（均已设备实测验证）：
+#   'no aaa authentication dot1x <list>' 不能带 'group radius'
+#   'no radius-server host <ip>' 直接写即可
+# 回滚时刻意保留两行：'aaa new-model' 和 'aaa authentication login default local'
+# （删除它们可能导致管理认证中断，无法 SSH 登录设备）。
+
+# --- 状态标志 -------------------------------------------------------------
+
+- name: "[aaa] Check whether the radius server is already configured"
+  ansible.builtin.set_fact:
+    radius_already: "{{ rc_before.stdout is search('(?m)^radius-server host\\s+%s(\\s|$)' | format(svc_aaa.radius_host)) }}"
+    dot1x_auth_present: "{{ rc_before.stdout is search('(?m)^aaa authentication dot1x\\s+%s\\s+group\\s+radius\\s*$' | format(svc_aaa.auth_list)) }}"
+
+# --- 部署前置检查 ---------------------------------------------------------
+
+- name: "[aaa][deploy] Abort if management-login auth already conflicts"
+  ansible.builtin.assert:
+    # 允许条件：没有 login 方法列表，或者正好是 'default local'
+    that:
+      - >-
+        not (rc_before.stdout | regex_search('(?m)^aaa authentication login(\\s|$)'))
+        or (rc_before.stdout | regex_search('(?m)^aaa authentication login default local\\s*$'))
+    fail_msg: >-
+      ABORTED: {{ inventory_hostname }} already has an 'aaa authentication
+      login' method list that is not 'default local'. Enabling AAA would
+      change management authentication - handle it manually first.
+    success_msg: "Pre-flight OK: no conflicting login method list"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[aaa][deploy] Abort if dot1x already uses a conflicting method list"
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (rc_before.stdout | regex_search('(?m)^aaa authentication dot1x(\\s|$)'))
+        or (rc_before.stdout | regex_search('(?m)^aaa authentication dot1x\\s+' ~ svc_aaa.auth_list ~ '\\s+group\\s+radius\\s*$'))
+    fail_msg: >-
+      ABORTED: {{ inventory_hostname }} already has an 'aaa authentication
+      dot1x' method list that does not use 'group radius'. Refusing to
+      replace it - review the existing dot1x setup first.
+    success_msg: "Pre-flight OK: no conflicting dot1x method list"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+# --- 部署 ----------------------------------------------------------------
+
+- name: "[aaa][deploy] Enable AAA/radius (key written only if no radius line exists yet)"
+  elgintester.rgos.rgos_config:
+    lines: >-
+      {{ ['aaa new-model']
+         + (['radius-server host ' ~ svc_aaa.radius_host ~ ' key ' ~ svc_aaa.radius_key]
+            if not radius_already else [])
+         + ['aaa authentication dot1x ' ~ svc_aaa.auth_list ~ ' group radius',
+            'aaa authentication login default local'] }}
+  when: svc_vlan_state | default('deployed') == 'deployed'
+  register: aaa_push
+
+- name: "[aaa][deploy] Verify - AAA/radius in the running configuration"
+  ansible.netcommon.cli_command:
+    command: show running-config
+  register: rc_after_aaa
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[aaa][deploy] Assert the AAA/radius block was applied"
+  ansible.builtin.assert:
+    that:
+      - >-
+        rc_after_aaa.stdout is search('(?m)^radius-server host\\s+%s(\\s|$)' | format(svc_aaa.radius_host))
+      - >-
+        rc_after_aaa.stdout is search('(?m)^aaa authentication dot1x\\s+%s\\s+group\\s+radius\\s*$' | format(svc_aaa.auth_list))
+      - >-
+        rc_after_aaa.stdout is search('(?m)^aaa authentication login default local\\s*$')
+    fail_msg: "AAA/radius block missing on {{ inventory_hostname }}"
+    success_msg: "AAA/radius block applied"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+# --- 回滚 ----------------------------------------------------------------
+
+- name: "[aaa][rollback] Remove the radius server and the dot1x auth list"
+  elgintester.rgos.rgos_config:
+    # 每个三元表达式都独立加括号；不加括号 Jinja 会把
+    # 'X + Y if cond else Z' 解析为 '(X+Y) if cond else Z'，
+    # 导致整个尾部静默消失。
+    lines: >-
+      {{ (['no radius-server host ' ~ svc_aaa.radius_host] if radius_already else [])
+         + (['no aaa authentication dot1x ' ~ svc_aaa.auth_list] if dot1x_auth_present else []) }}
+  when: >-
+    svc_vlan_state | default('deployed') == 'rolledback'
+    and (radius_already or dot1x_auth_present)
+  register: aaa_remove
+
+- name: "[aaa][rollback] Verify - AAA/radius lines are gone"
+  ansible.netcommon.cli_command:
+    command: show running-config
+  register: rc_after_aaa_rollback
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'rolledback'
+
+- name: "[aaa][rollback] Assert the radius server and dot1x method list are gone"
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (rc_after_aaa_rollback.stdout is search('(?m)^radius-server host\\s+%s(\\s|$)' | format(svc_aaa.radius_host)))
+      - >-
+        not (rc_after_aaa_rollback.stdout is search('(?m)^aaa authentication dot1x\\s+%s\\s+group\\s+radius\\s*$' | format(svc_aaa.auth_list)))
+    fail_msg: "AAA/radius rollback incomplete on {{ inventory_hostname }}"
+    success_msg: "radius server and dot1x method list removed (aaa new-model + login default local kept by design)"
+  when: svc_vlan_state | default('deployed') == 'rolledback'

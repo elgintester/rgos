@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# 用 cli_config 做幂等配置。
+#
+# 得益于 cliconf 的 get_diff 实现，重新运行本 playbook 时，
+# 如果配置已经匹配则报告 changed=false，只有缺失的行会被推送到设备。
+#
+# 用 --check 运行可以预览变更而不触碰设备。
+- name: Idempotent VLAN config on a Ruijie device
+  hosts: ruijie
+  gather_facts: false
+  tasks:
+    - name: Create a VLAN with name and SVI
+      ansible.netcommon.cli_config:
+        # 重要：子命令必须携带和 'show running-config' 输出中相同的
+        # 单空格缩进，否则 diff 引擎会把它们视为不同的行并重新推送
+        # （破坏幂等性）。
+        config: |
+          vlan 100
+           name ANSIBLE_TEST
+          interface vlan 100
+           ip address 192.168.100.254 255.255.255.0
+      register: result
+
+    - name: Show what was pushed
+      ansible.builtin.debug:
+        var: result.changed
+
+    - name: Verify with show command
+      ansible.netcommon.cli_command:
+        command: show vlan
+      register: check
+
+    - name: Assert the VLAN exists
+      ansible.builtin.assert:
+        that:
+          - "'ANSIBLE_TEST' in check.stdout"

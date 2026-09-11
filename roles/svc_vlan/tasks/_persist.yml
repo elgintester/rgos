@@ -1,0 +1,13 @@
+﻿---
+# 把 running-config 持久化到 startup-config。
+#
+# save_when=modified 会比较 running-config 和 startup-config，
+# 仅在两者不同时才发送 'write'，所以幂等重跑（没有任何变更）不会触碰 flash。
+# 本任务刻意无条件运行（不加 'when: any changed'）：
+# 如果上一次运行已经完成了所有移除（本次全部跳过），
+# 待执行的删除仍然需要持久化——在 'write' 之前，
+# running-config 和 startup-config 是不同的。保存判断由模块自己负责。
+
+- name: "Persist changes to startup-config (write)"
+  elgintester.rgos.rgos_config:
+    save_when: modified

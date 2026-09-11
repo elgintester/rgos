@@ -1,0 +1,111 @@
+﻿---
+# 功能模块：svi
+# 部署时创建 VLAN 三层接口（SVI）并配置主 IP（可选次 IP），
+# 回滚时删除整个 SVI 接口。
+#
+# 部署安全机制：如果 SVI 已存在且携带了不同的主 IP，直接中止——
+# RGOS 在推送 'ip address'（不带 secondary）时会静默覆盖原主 IP。
+#
+# 门控机制：RGOS 渲染 SVI 配置块有自己的格式，文本 diff 不一定可靠，
+# 所以门控基于实际的 IP 地址行，而不是依赖 diff 结果。
+
+- name: "[svi] Capture the service SVI's configuration"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface vlan {{ dev.svc_vlan }}"
+  register: svi_before
+  changed_when: false
+  ignore_errors: true   # SVI 不存在时 RGOS 会返回错误
+
+# --- 部署前置检查 ---------------------------------------------------------
+
+- name: "[svi][deploy] Abort if the SVI carries a conflicting primary address"
+  ansible.builtin.assert:
+    # 允许条件：完全没有主 IP，或者主 IP 已经是我们要配置的
+    that:
+      - >-
+        not (svi_before.stdout | default('') | regex_search('(?m)^\\s*ip address\\s+\\S+\\s+\\S+\\s*$'))
+        or (svi_before.stdout | default('') | regex_search('(?m)^\\s*ip address\\s+' ~ dev.svc_ip ~ '\\s+' ~ dev.svc_mask ~ '\\s*$'))
+    fail_msg: >-
+      ABORTED: interface Vlan {{ dev.svc_vlan }} on {{ inventory_hostname }}
+      already carries an address that is not {{ dev.svc_ip }}
+      {{ dev.svc_mask }}. Refusing to overwrite it - pick a different
+      svc_vlan/svc_ip or clean the SVI manually.
+    success_msg: "Pre-flight OK: no conflicting primary IP on interface Vlan {{ dev.svc_vlan }}"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+# --- 状态标志 -------------------------------------------------------------
+
+- name: "[svi] Work out which addresses are already present"
+  ansible.builtin.set_fact:
+    svi_has_primary: "{{ svi_before.stdout | default('') is search('(?m)^\\s*ip address\\s+%s\\s+%s(\\s|$)' | format(dev.svc_ip, dev.svc_mask)) }}"
+    svi_has_secondary: "{{ svi_before.stdout | default('') is search('(?m)^\\s*ip address\\s+%s\\s+%s\\s+secondary(\\s|$)' | format(dev.svc_secondary_ip | default(''), dev.svc_mask)) }}"
+
+# --- 部署 ----------------------------------------------------------------
+
+- name: "[svi][deploy] Ensure the SVI and its addresses"
+  elgintester.rgos.rgos_config:
+    lines: >-
+      {{ ['ip address ' ~ dev.svc_ip ~ ' ' ~ dev.svc_mask]
+         + (['ip address ' ~ dev.svc_secondary_ip | default('') ~ ' ' ~ dev.svc_mask ~ ' secondary']
+            if dev.svc_secondary_ip | default('') | length else []) }}
+    parents: "interface Vlan {{ dev.svc_vlan }}"
+  when: >-
+    svc_vlan_state | default('deployed') == 'deployed'
+    and (not svi_has_primary
+         or (dev.svc_secondary_ip | default('') | length > 0 and not svi_has_secondary))
+  register: svi_push
+
+- name: "[svi][deploy] Verify - the SVI carries the service addresses"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface vlan {{ dev.svc_vlan }}"
+  register: svi_verify
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[svi][deploy] Assert the SVI has the primary address"
+  ansible.builtin.assert:
+    that:
+      - >-
+        svi_verify.stdout is search('(?m)^\\s*ip address\\s+%s\\s+%s(\\s|$)' | format(dev.svc_ip, dev.svc_mask))
+    fail_msg: "SVI Vlan {{ dev.svc_vlan }} does not show {{ dev.svc_ip }} {{ dev.svc_mask }}"
+    success_msg: "SVI Vlan {{ dev.svc_vlan }} carries {{ dev.svc_ip }} {{ dev.svc_mask }}"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[svi][deploy] Assert the SVI has the secondary address"
+  ansible.builtin.assert:
+    that:
+      - >-
+        svi_verify.stdout is search('(?m)^\\s*ip address\\s+%s\\s+%s\\s+secondary(\\s|$)' | format(dev.svc_secondary_ip | default(''), dev.svc_mask))
+    fail_msg: "Secondary address missing on SVI Vlan {{ dev.svc_vlan }}"
+    success_msg: "Secondary address present on SVI Vlan {{ dev.svc_vlan }}"
+  when: svc_vlan_state | default('deployed') == 'deployed' and dev.svc_secondary_ip | default('') | length > 0
+
+# --- 回滚 ----------------------------------------------------------------
+
+- name: "[svi][rollback] Work out whether the SVI exists"
+  ansible.builtin.set_fact:
+    svi_present: "{{ not (svi_before.failed or (svi_before.stdout | default('') | lower) is search('does not exist')) }}"
+
+- name: "[svi][rollback] Delete the SVI"
+  elgintester.rgos.rgos_config:
+    lines:
+      - "no interface Vlan {{ dev.svc_vlan }}"
+  when: svc_vlan_state | default('deployed') == 'rolledback' and svi_present
+  register: svi_remove
+
+- name: "[svi][rollback] Verify - the SVI addresses are gone"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface vlan {{ dev.svc_vlan }}"
+  register: svi_after
+  changed_when: false
+  ignore_errors: true
+  when: svc_vlan_state | default('deployed') == 'rolledback'
+
+- name: "[svi][rollback] Assert the SVI addresses are gone"
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (svi_after.stdout | default('') is search('(?m)^\\s*ip address\\s+%s(\\s|$)' | format(dev.svc_ip)))
+    fail_msg: "SVI Vlan {{ dev.svc_vlan }} still shows {{ dev.svc_ip }}"
+    success_msg: "SVI addresses removed"
+  when: svc_vlan_state | default('deployed') == 'rolledback'

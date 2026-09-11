@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  author: Ruijie RGOS collection contributors
+  description: Per-device service VLAN deploy/rollback (parameter-table driven)
+  company: Community
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16.0"
+  platforms:
+    - name: Generic
+      versions:
+        - all
+  galaxy_tags:
+    - ruijie
+    - rgos
+    - network
+    - switch
+dependencies: []

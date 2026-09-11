@@ -1,0 +1,129 @@
+﻿---
+# 功能模块：dot1x
+# 部署时应用全局 dot1x 认证并在 access 端口启用 dot1x，
+# 回滚时移除端口 dot1x 和全局 dot1x 认证命令。
+#
+# 该模块依赖 aaa 模块（必须先创建 'aaa authentication dot1x <list> group radius'
+# 方法列表，本模块的全局命令才能生效）。
+#
+# 关键配置：
+#   dot1x authentication <list>   （全局应用——把方法列表绑定到 dot1x 子系统）
+#   interface <port>
+#     dot1x port-control auto      （端口级——启用 802.1X 认证）
+#
+# 回滚怪癖（设备实测）：
+#   'no dot1x authentication' 不能带列表名——
+#   'no dot1x authentication default' 会被拒绝并报 '% Invalid input'。
+#   裸 'no dot1x authentication' 才有效。
+
+# --- 状态标志 -------------------------------------------------------------
+
+- name: "[dot1x] Work out whether the global dot1x auth command is applied"
+  ansible.builtin.set_fact:
+    dot1x_auth_applied: "{{ rc_before.stdout is search('(?m)^%s\\s*$' | format(svc_aaa.dot1x_auth_cmd)) }}"
+
+- name: "[dot1x] Initialize ports_with_dot1x"
+  ansible.builtin.set_fact:
+    ports_with_dot1x: []
+
+- name: "[dot1x] Work out which ports already have dot1x"
+  ansible.builtin.set_fact:
+    ports_with_dot1x: "{{ ports_with_dot1x + [item.item] }}"
+  loop: "{{ port_rc.results }}"
+  loop_control:
+    label: "{{ item.item.short }}"
+  when: item.stdout is search('(?m)^\\s*%s\\s*$' | format(svc_aaa.dot1x_cmd))
+
+# --- 部署 ----------------------------------------------------------------
+
+- name: "[dot1x][deploy] Apply the global dot1x authentication command"
+  elgintester.rgos.rgos_config:
+    lines:
+      - "{{ svc_aaa.dot1x_auth_cmd }}"
+  when: svc_vlan_state | default('deployed') == 'deployed' and not dot1x_auth_applied
+  register: dot1x_global_push
+
+- name: "[dot1x][deploy] Enable dot1x on the access ports"
+  elgintester.rgos.rgos_config:
+    content: |
+      {% for p in dev.svc_ports %}
+      interface {{ p.name }}
+       {{ svc_aaa.dot1x_cmd }}
+      {% endfor %}
+  when: >-
+    svc_vlan_state | default('deployed') == 'deployed'
+    and ports_with_dot1x | map(attribute='short') | list
+        != dev.svc_ports | map(attribute='short') | list
+  register: dot1x_port_push
+
+- name: "[dot1x][deploy] Verify - dot1x is enabled on every target port"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface {{ item.name }}"
+  register: dot1x_port_verify
+  changed_when: false
+  loop: "{{ dev.svc_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[dot1x][deploy] Assert dot1x present on each port"
+  ansible.builtin.assert:
+    that:
+      - item.stdout is search('(?m)^\\s*%s\\s*$' | format(svc_aaa.dot1x_cmd))
+    fail_msg: "dot1x NOT enabled on {{ item.item.name }}"
+    success_msg: "dot1x enabled on {{ item.item.name }}"
+  loop: "{{ dot1x_port_verify.results }}"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[dot1x][deploy] Verify - the global dot1x auth command is in running-config"
+  ansible.netcommon.cli_command:
+    command: show running-config
+  register: rc_after_dot1x
+  changed_when: false
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+- name: "[dot1x][deploy] Assert the global dot1x auth command was applied"
+  ansible.builtin.assert:
+    that:
+      - rc_after_dot1x.stdout is search('(?m)^%s\\s*$' | format(svc_aaa.dot1x_auth_cmd))
+    fail_msg: "Global dot1x auth command missing on {{ inventory_hostname }}"
+    success_msg: "Global dot1x authentication command applied"
+  when: svc_vlan_state | default('deployed') == 'deployed'
+
+# --- 回滚 ----------------------------------------------------------------
+
+- name: "[dot1x][rollback] Remove dot1x from the ports"
+  elgintester.rgos.rgos_config:
+    content: |
+      {% for p in ports_with_dot1x %}
+      interface {{ p.name }}
+       {{ svc_aaa.dot1x_remove }}
+      {% endfor %}
+  when: svc_vlan_state | default('deployed') == 'rolledback' and ports_with_dot1x | length > 0
+  register: dot1x_port_remove
+
+- name: "[dot1x][rollback] Remove the global dot1x authentication command"
+  elgintester.rgos.rgos_config:
+    lines:
+      - "{{ svc_aaa.dot1x_auth_remove }}"
+  when: svc_vlan_state | default('deployed') == 'rolledback' and dot1x_auth_applied
+  register: dot1x_global_remove
+
+- name: "[dot1x][rollback] Verify - dot1x removed from the ports"
+  ansible.netcommon.cli_command:
+    command: "show running-config interface {{ item.name }}"
+  register: dot1x_port_gone
+  changed_when: false
+  loop: "{{ dev.svc_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: svc_vlan_state | default('deployed') == 'rolledback'
+
+- name: "[dot1x][rollback] Assert dot1x is gone from every port"
+  ansible.builtin.assert:
+    that:
+      - not (item.stdout is search('(?m)^\\s*%s\\s*$' | format(svc_aaa.dot1x_cmd)))
+    fail_msg: "dot1x still enabled on {{ item.item.name }}"
+    success_msg: "dot1x removed from {{ item.item.name }}"
+  loop: "{{ dot1x_port_gone.results }}"
+  when: svc_vlan_state | default('deployed') == 'rolledback'

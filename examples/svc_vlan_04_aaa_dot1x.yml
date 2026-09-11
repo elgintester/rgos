@@ -1,0 +1,69 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# 示例 04：AAA/radius + dot1x 认证（aaa + dot1x 模块）
+# ============================================================================
+# 场景：客户需要在已有的业务 VLAN + 端口上启用 802.1X 认证。
+#       VLAN/SVI/端口绑定已经存在（或由其他 playbook 管理），这里只加认证。
+#
+# 开启的模块：aaa + dot1x（vlan/svi/port_binding 关闭）
+# 必需参数：svc_aaa（radius_host, radius_key, auth_list, dot1x_cmd, dot1x_auth_cmd）
+#           dev.svc_ports（dot1x 要配置在哪些端口上）
+#
+# 注意：
+#   - dot1x 依赖 aaa：dot1x 开则 aaa 必须开，否则报错中止
+#   - aaa 模块会创建 aaa new-model、radius-server、login 和 dot1x 方法列表
+#   - dot1x 模块会应用全局 "dot1x authentication <list>"，并在端口上配置
+#     "dot1x port-control auto"
+#   - radius key 只写一次（RGOS 存储为加密形式，无法明文 diff）；
+#     要改 key 请先在设备上手动删除旧的 radius-server 行
+#   - 回滚时 "aaa new-model" 和 "aaa authentication login default local"
+#     会刻意保留（删除它们可能导致管理认证中断）
+#
+# 运行：
+#   ansible-playbook examples/svc_vlan_04_aaa_dot1x.yml
+#
+# 回滚：把 svc_vlan_state 改为 rolledback，或运行示例 06。
+# ============================================================================
+- name: Enable AAA/radius and dot1x authentication
+  hosts: ruijie
+  gather_facts: false
+
+  vars:
+    # 开 aaa + dot1x，其余关闭
+    svc_features:
+      vlan: false
+      svi: false
+      port_binding: false
+      aaa: true
+      dot1x: true
+
+    # 共享 AAA/radius/dot1x 配置
+    svc_aaa:
+      enabled: true
+      radius_host: 172.17.99.212
+      radius_key: "your-radius-secret"
+      auth_list: default
+      dot1x_cmd: "dot1x port-control auto"
+      dot1x_remove: "no dot1x port-control auto"
+      dot1x_auth_cmd: "dot1x authentication default"
+      dot1x_auth_remove: "no dot1x authentication"
+
+    # dot1x 要配置在哪些端口上（即使 port_binding 关闭，dot1x 也需要这个列表）
+    svc_devices:
+      s6150-01:
+        svc_vlan: 100    # dot1x 模块不直接用 svc_vlan，但参数完整性检查会要求
+        svc_ports:
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+      s6150-02:
+        svc_vlan: 101
+        svc_ports:
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+
+  roles:
+    - role: elgintester.rgos.svc_vlan
+      svc_vlan_state: deployed

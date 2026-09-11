@@ -1,0 +1,13 @@
+---
+# 公共最终摘要：在所有模块执行完毕后，按开启的功能模块动态报告结果。
+# 由 main.yml 在 persist 之后 include。
+
+- name: "Final summary"
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: state={{ svc_vlan_state | default('deployed') }}
+      {% if features.vlan | default(true) %}vlan={{ dev.svc_vlan }}{% endif %}
+      {% if features.svi | default(true) %}svi={{ dev.svc_ip }}/{{ dev.svc_mask }}{% endif %}
+      {% if features.port_binding | default(true) %}ports={{ dev.svc_ports | map(attribute='short') | join(',') }}{% endif %}
+      {% if features.aaa | default(true) %}radius={{ svc_aaa.radius_host }}{% endif %}
+      {% if features.dot1x | default(true) %}dot1x=enabled{% endif %}

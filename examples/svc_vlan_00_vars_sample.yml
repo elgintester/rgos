@@ -1,0 +1,78 @@
+# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# svc_vlan role - 参数表示例（所有示例 playbook 的基础）
+# ============================================================================
+# 这个文件展示 svc_vlan role 所需的三组变量的完整结构：
+#   1. svc_features  - 全局功能开关（5 个模块独立开关）
+#   2. svc_aaa       - 共享 AAA/radius/dot1x 配置
+#   3. svc_devices   - 每台设备独立参数（按 inventory 主机名索引）
+#
+# 使用方式：在 playbook 中用 vars_files 引用，或直接把内容写进 playbook。
+#   vars_files:
+#     - svc_vlan_00_vars_sample.yml
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 1. 全局功能开关
+# ---------------------------------------------------------------------------
+# 5 个模块独立开关，设为 false 则该模块完全跳过（不探测、不下发、不验证、不报错）。
+# 默认全开。设备级可用 dev.features 覆盖（见下方 svc_devices 注释）。
+svc_features:
+  vlan: true          # 创建/删除业务 VLAN
+  svi: true           # 创建/删除 VLAN 接口 + IP 地址（主/次）
+  port_binding: true  # 端口绑定/解绑到业务 VLAN
+  aaa: true           # aaa new-model + radius-server + login/dot1x 方法列表
+  dot1x: true         # 全局 dot1x authentication 应用 + 端口 dot1x port-control
+                      # 注意：dot1x 依赖 aaa，dot1x 开则 aaa 必须开，否则报错中止
+
+# ---------------------------------------------------------------------------
+# 2. 共享 AAA/radius/dot1x 配置
+# ---------------------------------------------------------------------------
+# 所有设备共用。只有 aaa 或 dot1x 模块开启时需要。
+svc_aaa:
+  enabled: true
+  radius_host: 172.17.99.212       # RADIUS 服务器 IP
+  radius_key: "your-radius-secret"  # RADIUS 共享密钥（明文写入，设备自动加密存储）
+  auth_list: default                 # AAA 方法列表名
+  # dot1x 端口控制命令（RGOS 语法）
+  dot1x_cmd: "dot1x port-control auto"
+  dot1x_remove: "no dot1x port-control auto"
+  # dot1x 全局认证应用命令（RGOS 语法，注意回滚不带 default）
+  dot1x_auth_cmd: "dot1x authentication default"
+  dot1x_auth_remove: "no dot1x authentication"
+
+# ---------------------------------------------------------------------------
+# 3. 每台设备独立参数
+# ---------------------------------------------------------------------------
+# 按 inventory 主机名索引。每台设备可以有不同的 VLAN / IP / 端口。
+# 缺少某台设备的条目会直接报错中止（不会静默跳过）。
+svc_devices:
+  # ---- 设备 1：全套配置示例 ----
+  s6150-01:                          # 必须等于 inventory 中的主机名
+    svc_vlan: 100                    # 业务 VLAN ID（vlan 模块必需）
+    svc_vlan_name: ""                # 可选：VLAN 名称，空则不配置
+    svc_ip: 92.89.100.1              # SVI 主 IP（svi 模块必需）
+    svc_mask: 255.255.255.0          # SVI 掩码（svi 模块必需）
+    svc_secondary_ip: ""              # 可选：SVI 次 IP，空则不配置
+    svc_ports:                        # 要绑定的端口列表（port_binding 模块必需）
+      - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+      - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+    # 可选：设备级 features 覆盖（合并到全局 svc_features 之上）
+    # 例：这台设备只要 VLAN + 端口，不要 SVI/AAA/dot1x：
+    # features:
+    #   svi: false
+    #   aaa: false
+    #   dot1x: false
+
+  # ---- 设备 2：只配 VLAN + 端口的示例（设备级覆盖） ----
+  # s6150-02:
+  #   svc_vlan: 101
+  #   svc_ports:
+  #     - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+  #   features:
+  #     svi: false
+  #     aaa: false
+  #     dot1x: false

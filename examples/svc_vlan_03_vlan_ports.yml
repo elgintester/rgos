@@ -1,0 +1,52 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# 示例 03：业务 VLAN + 端口绑定（vlan + port_binding 模块）
+# ============================================================================
+# 场景：客户需要创建业务 VLAN，并把指定的 access 端口绑定到该 VLAN。
+#       不需要 SVI/IP、AAA、dot1x。
+#
+# 开启的模块：vlan + port_binding
+# 必需参数：dev.svc_vlan, dev.svc_ports
+#
+# 安全特性：
+#   - 如果目标端口是 trunk，playbook 报错中止（不会把 trunk 改成 access）
+#   - 回滚时用 "no switchport access vlan"（不带 VLAN ID），端口回到默认 VLAN 1
+#   - 没有"恢复到原始 VLAN"的机制——回滚只是解绑，不是还原
+#
+# 运行：
+#   ansible-playbook examples/svc_vlan_03_vlan_ports.yml
+#
+# 回滚：把 svc_vlan_state 改为 rolledback，或运行示例 06。
+# ============================================================================
+- name: Deploy service VLAN and bind access ports
+  hosts: ruijie
+  gather_facts: false
+
+  vars:
+    # 开 vlan + port_binding，其余关闭
+    svc_features:
+      vlan: true
+      svi: false
+      port_binding: true
+      aaa: false
+      dot1x: false
+
+    svc_devices:
+      s6150-01:
+        svc_vlan: 100
+        svc_ports:
+          # name = 端口全名（RGOS 命令用），short = 短名（日志/验证用）
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+      s6150-02:
+        svc_vlan: 101
+        svc_ports:
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+
+  roles:
+    - role: elgintester.rgos.svc_vlan
+      svc_vlan_state: deployed

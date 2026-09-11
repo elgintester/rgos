@@ -1,0 +1,70 @@
+﻿# Copyright (c) 2026 Ruijie RGOS collection contributors
+# GNU General Public License v3.0+ (see LICENSES/GPL-3.0-or-later.txt or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+# ============================================================================
+# 示例 06：回滚（svc_vlan_state: rolledback）
+# ============================================================================
+# 回滚会"配什么删什么"——只删除当前 svc_features 中开启的模块对应的配置，
+# 按逆序执行：dot1x → aaa → port_binding → svi → vlan。
+#
+# 这个示例回滚全套配置（5 个模块全开）。如果只回滚部分模块，
+# 把对应的 svc_features 设为 false 即可（例如只回滚 dot1x，就把
+# vlan/svi/port_binding/aaa 都设为 false）。
+#
+# 回滚的安全特性：
+#   - 每个 no 命令都门控在"该配置确实存在"上，不存在就跳过（不会报错）
+#   - 端口解绑用 "no switchport access vlan"（不带 VLAN ID），端口回到默认 VLAN 1
+#   - dot1x 方法列表回滚用 "no aaa authentication dot1x <list>"（不带 group radius）
+#   - 全局 dot1x 回滚用 "no dot1x authentication"（不带 default）
+#   - "aaa new-model" 和 "aaa authentication login default local" 刻意保留
+#     （删除它们可能导致管理认证中断，无法 SSH 登录设备）
+#   - 没有"恢复到原始 VLAN"的机制——回滚只是解绑，不是还原到某个记录的基线
+#   - 回滚后自动 write 保存
+#
+# 运行：
+#   ansible-playbook examples/svc_vlan_06_rollback.yml
+# ============================================================================
+- name: Roll back the service VLAN stack
+  hosts: ruijie
+  gather_facts: false
+
+  vars:
+    # 回滚哪些模块，就开哪些。这里全开 = 回滚全套。
+    svc_features:
+      vlan: true
+      svi: true
+      port_binding: true
+      aaa: true
+      dot1x: true
+
+    # 参数必须和部署时一致（role 用这些参数定位要删除的配置）
+    svc_aaa:
+      enabled: true
+      radius_host: 172.17.99.212
+      radius_key: "your-radius-secret"
+      auth_list: default
+      dot1x_cmd: "dot1x port-control auto"
+      dot1x_remove: "no dot1x port-control auto"
+      dot1x_auth_cmd: "dot1x authentication default"
+      dot1x_auth_remove: "no dot1x authentication"
+
+    svc_devices:
+      s6150-01:
+        svc_vlan: 100
+        svc_ip: 92.89.100.1
+        svc_mask: 255.255.255.0
+        svc_ports:
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+      s6150-02:
+        svc_vlan: 101
+        svc_ip: 92.89.101.1
+        svc_mask: 255.255.255.0
+        svc_ports:
+          - { name: TFGigabitEthernet 0/15, short: TF0/15 }
+          - { name: TFGigabitEthernet 0/16, short: TF0/16 }
+
+  roles:
+    - role: elgintester.rgos.svc_vlan
+      svc_vlan_state: rolledback   # rolledback = 回滚；deployed = 下发
