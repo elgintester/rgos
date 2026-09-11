@@ -12,7 +12,7 @@
 # https://github.com/ansible/galaxy/issues and publish under it separately.
 namespace: elgintester
 name: rgos
-version: 0.5.1
+version: 0.5.2
 readme: README.md
 authors:
   - Ruijie RGOS collection contributors
